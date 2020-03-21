@@ -1,6 +1,7 @@
 package main
 
 import (
+    "context"
     "fmt"
     "log"
     "time"
@@ -9,14 +10,24 @@ import (
     kafka "github.com/segmentio/kafka-go"
 )
 
+const (
+    MEGABYTES = 1000000
+    GIGABYTES = 1000000000
+)
+
 func main() {
-    db, err := badger.Open(badger.DefaultOptions("./badger"))
+    options := badger.
+        DefaultOptions("./badger").
+        WithValueLogFileSize(25 * MEGABYTES)
+
+    db, err := badger.Open(options)
     if err != nil {
         log.Fatal(err)
     }
     defer db.Close()
 
-    go RunGC(db, 0.5, 300)
+    db.RunValueLogGC(0.1)
+    go RunGC(db, 0.1, 30)
 
     RunKafkaConsumer(KafkaReader(), db)
 }
@@ -29,27 +40,30 @@ func KafkaReader() *kafka.Reader {
         Partition       : 0,
         MinBytes        : 0,
         MaxBytes        : 10e6,
-        CommitInterval  : 1000 * time.Second,
+        CommitInterval  : time.Second,
+        MaxWait         : 10 * time.Millisecond,
     })
 }
 
 func RunKafkaConsumer(r *kafka.Reader, db *badger.DB) {
     for {
-        msg, err := k.ReadMessage(contect.Background())
+        m, err := r.ReadMessage(context.Background())
         if err != nil {
             fmt.Println("kafka read message error:", err)
         }
 
-        fmt.Printf("message topic/partition/offset %v/%v/%v: %s\n", m.Topic, m.Partition, m.Offset, m.Value)
-        CommitMessage(m, db)
+//        fmt.Printf("message topic/partition/offset %v/%v/%v\n", m.Topic, m.Partition, m.Offset)
+        go func(m kafka.Message, db *badger.DB) {
+            CommitMessage(m, db)
 
-        ThrowMessage(m)
-        DiscardMessage(m, db)
+            ThrowMessage(m)
+            DiscardMessage(m, db)
+        }(m, db)
     }
 }
 
-func CommitMessage(m *kafka.Message, db *badger.DB) {
-    key := fmt.Sprintf("%v-%v", m.Topic. m.Partition)
+func CommitMessage(m kafka.Message, db *badger.DB) {
+    key := fmt.Sprintf("%v-%v", m.Topic, m.Partition)
     val := fmt.Sprintf("%v", m.Value)
 
     err := NewEntry(db, []byte(key), []byte(val))
@@ -58,15 +72,15 @@ func CommitMessage(m *kafka.Message, db *badger.DB) {
     }
 }
 
-func ThrowMessage(m *kafka.Message) int {
-    fmt.Println("Throw message: %s\n", m.Value)
+func ThrowMessage(m kafka.Message) int {
+//    fmt.Println("Throw message: %s\n", string(m.Value))
     return 0
 }
 
-func DiscardMessage(m *kafka.Message, db *badger.DB) {
-    key := fmt.Sprintf("%v-%v", m.Topic. m.Partition)
+func DiscardMessage(m kafka.Message, db *badger.DB) {
+    key := fmt.Sprintf("%v-%v", m.Topic, m.Partition)
 
-    err := DeleteEntry(db, key)
+    err := DeleteEntry(db, []byte(key))
     if err != nil {
         fmt.Println("badger delete entry error:", err)
     }
@@ -77,14 +91,23 @@ func RunGC(db *badger.DB, discardRatio float64, sec int) {
     defer ticker.Stop()
 
     for range ticker.C {
-        err := db.RunValueLogGC(discardRatio)
-        fmt.Println(err)
+        sizeLsm, sizeVlog := db.Size()
+        if sizeLsm > GIGABYTES || sizeVlog > GIGABYTES {
+        again:
+            err := db.RunValueLogGC(discardRatio)
+            fmt.Printf("GC Report: %v. LSMSize: %v, VLogSize: %v\n", err, sizeLsm, sizeVlog)
+            if err == nil{
+                goto again
+            }
+        } else {
+            fmt.Println("GC no needed yet", sizeLsm, sizeVlog)
+        }
     }
 }
 
 func NewEntry(db *badger.DB, key, val []byte) error {
     err := db.Update(func(txn *badger.Txn) error {
-        entry := badger.NewEntry(key, val)
+        entry := badger.NewEntry(key, val).WithTTL(time.Second)
         err := txn.SetEntry(entry)
 
         return err
