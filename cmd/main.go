@@ -53,7 +53,7 @@ func RunKafkaConsumer(r *kafka.Reader, db *badger.DB) {
             fmt.Println("kafka read message error:", err)
         }
 
-//        fmt.Printf("message topic/partition/offset %v/%v/%v\n", m.Topic, m.Partition, m.Offset)
+        // fmt.Printf("message topic/partition/offset %v/%v/%v\n", m.Topic, m.Partition, m.Offset)
         go func(m kafka.Message, db *badger.DB) {
             CommitMessage(m, db)
 
@@ -74,7 +74,7 @@ func CommitMessage(m kafka.Message, db *badger.DB) {
 }
 
 func ThrowMessage(m kafka.Message) int {
-//    fmt.Println("Throw message: %s\n", string(m.Value))
+    // fmt.Println("Throw message: %s\n", string(m.Value))
     return 0
 }
 
@@ -108,7 +108,7 @@ func RunGC(db *badger.DB, discardRatio float64, sec int) {
 
 func NewEntry(db *badger.DB, key, val []byte) error {
     err := db.Update(func(txn *badger.Txn) error {
-        entry := badger.NewEntry(key, val).WithTTL(time.Second)
+        entry := badger.NewEntry(key, val).WithTTL(5 * time.Minute)
         err := txn.SetEntry(entry)
 
         return err
