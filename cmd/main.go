@@ -13,12 +13,13 @@ import (
 const (
     MEGABYTES = 1000000
     GIGABYTES = 1000000000
+
+    BADGER_FILE_PATH = "./badger"
 )
 
 func main() {
-    options := badger.
-        DefaultOptions("./badger").
-        WithValueLogFileSize(25 * MEGABYTES)
+    options := badger.DefaultOptions(BADGER_FILE_PATH)
+    options.WithValueLogFileSize(25 * MEGABYTES)
 
     db, err := badger.Open(options)
     if err != nil {
